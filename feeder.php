@@ -20,45 +20,56 @@ while(true) {
         $pdo -> setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
         $pdo -> setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         
-        $pdo -> query('CREATE TABLE IF NOT EXISTS blocks(
-                           height bigint not null primary key,
-                           hash varchar(66) not null,
-                           timestamp bigint default null,
-                           coinbase varchar(42) not null,
-                           body longtext not null,
-                           execution_block_hash varchar(66) default null,
-                           fee_recipient varchar(42) default null,
-                           wd_addresses text default null
-                       )');
-        $pdo -> query('CREATE TABLE IF NOT EXISTS state(
-                           network_name varchar(128) not null primary key,
-                           peak_height bigint not null,
-                           difficulty bigint not null,
-                           netspace bigint not null
-                       )');
-        
         $networkInfo = $beacon -> getNetworkInfo();
         $blockchainState = $beacon -> getBlockchainState();
+        
+        $task = [
+            ':timestamp' => time() - (24 * 60 * 60)
+        ];
+        
+        $sql = 'DELETE FROM netspace
+                WHERE timestamp < :timestamp';
+        
+        $q = $pdo -> prepare($sql);
+        $q -> execute($task);
+        
+        if($debug) echo "Deleted old netspace records\n";
+        
+        $task = [
+            ':timestamp' => time(),
+            ':netspace' => $blockchainState -> space
+        ];
+        
+        $sql = 'INSERT INTO netspace(
+                    timestamp,
+                    netspace
+                ) VALUES(
+                    :timestamp,
+                    :netspace
+                )';
+        
+        $q = $pdo -> prepare($sql);
+        $q -> execute($task);
+        
+        if($debug) echo "Inserted netspace record\n";
+        
+        $q = $pdo -> query("SELECT netspace FROM netspace ORDER BY timestamp ASC LIMIT 1");
+        $netspacePrev = $q -> fetch();
         
         $task = [
             ':network_name' => $networkInfo -> network_name,
             ':peak_height' => $blockchainState -> peak -> height,
             ':difficulty' => $blockchainState -> difficulty,
-            ':netspace' => $blockchainState -> space
+            ':netspace' => $blockchainState -> space,
+            ':netspace_prev' => $netspacePrev['netspace']
         ];
         
-        $sql = 'REPLACE INTO state(
-                    network_name,
-                    peak_height,
-                    difficulty,
-                    netspace
-                )
-                VALUES(
-                    :network_name,
-                    :peak_height,
-                    :difficulty,
-                    :netspace
-                )';
+        $sql = 'UPDATE state
+                SET network_name = :network_name,
+                    peak_height = :peak_height,
+                    difficulty = :difficulty,
+                    netspace = :netspace,
+                    netspace_prev = :netspace_prev';
         
         $q = $pdo -> prepare($sql);
         $q -> execute($task);
@@ -148,7 +159,24 @@ while(true) {
             $q = $pdo -> prepare($sql);
             $q -> execute($task);
             
-            if($debug) echo "Inserted block: height = $dbHeight\n"; 
+            if($debug) echo "Inserted block: height = $dbHeight\n";
+            
+            foreach($block -> finished_sub_slots as $fss) {
+                if($fss -> challenge_chain -> new_difficulty) {
+                    $task = [
+                        ':epoch_height' => $dbHeight
+                    ];
+                    $sql = 'UPDATE state
+                            SET epoch_height = :epoch_height';
+                    
+                    $q = $pdo -> prepare($sql);
+                    $q -> execute($task);
+                    
+                    if($debug) echo "Updated epoch height to $dbHeight\n";
+                    
+                    break;
+                }
+            }
         }
     }
     
