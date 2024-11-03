@@ -1,0 +1,5 @@
+{
+    "require": {
+        "bpx-chain/bpx-beacon-php": "^1.0"
+    }
+}
